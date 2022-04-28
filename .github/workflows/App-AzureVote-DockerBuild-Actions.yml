@@ -22,7 +22,7 @@ on:
         type: string
       NAMESPACE:
         description: 'The Kubernetes Namespace to deploy the Application to'
-        default: "a0008"
+        default: "default"
         required: false
         type: string
       APPREPO:
