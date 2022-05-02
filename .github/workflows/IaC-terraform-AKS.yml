@@ -5,7 +5,7 @@ on:
     inputs:
       ENVIRONMENT:
         description: 'A GitHub Environment to pull action secrets from'
-        required: false
+        required: true
         type: environment
       REGION:
         description: 'The Azure region to deploy to'
