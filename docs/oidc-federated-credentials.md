@@ -7,7 +7,9 @@ Please follow [this guide](https://docs.microsoft.com/azure/developer/github/con
 
 This repository uses a script to provide a simple way to create a GitHub OIDC federated credential, it is based on the steps outlined here: [https://docs.microsoft.com/azure/developer/github/connect-from-azure](https://docs.microsoft.com/azure/developer/github/connect-from-azure).
 
-The script will create a new application, assign the correct Azure RBAC permissions for the Resource Group containing your AKS cluster, and create Federated Identity Credentials for both an environment and branch.
+The script will create a new application, assign the correct Azure RBAC permissions for the Subscription **OR** Resource Group containing your AKS cluster, and create Federated Identity Credentials for both an environment and branch.
+
+> The script requires AZ CLI >= 2.37
 
 ```bash
 #Set up user specific variables
@@ -21,13 +23,18 @@ GHENV=prod
 #Create App/Service Principal
 APP=$(az ad app create --display-name $APPNAME)
 appId=$(echo $APP | jq -r ".appId"); echo $appId
-applicationObjectId=$(echo $APP | jq -r ".objectId")
+applicationObjectId=$(echo $APP | jq -r ".id")
 SP=$(az ad sp create --id $appId)
-assigneeObjectId=$(echo $SP | jq -r ".objectId"); echo $assigneeObjectId
+assigneeObjectId=$(echo $SP | jq -r ".id"); echo $assigneeObjectId
 
-#Create Role Assignment (Azure RG RBAC)
-az role assignment create --role Owner --resource-group $RG  --assignee-object-id  $assigneeObjectId --assignee-principal-type ServicePrincipal
-az role assignment create --role "Azure Kubernetes Service RBAC Cluster Admin" --resource-group $RG  --assignee-object-id  $assigneeObjectId --assignee-principal-type ServicePrincipal
+#Create Role Assignments (Azure Subscription level RBAC)
+subscriptionId=$(az account show --query id -o tsv)
+az role assignment create --role Owner --scope "/subscriptions/$subscriptionId" --assignee-object-id $assigneeObjectId --assignee-principal-type ServicePrincipal
+az role assignment create --role "Azure Kubernetes Service RBAC Cluster Admin" --scope "/subscriptions/$subscriptionId" --assignee-object-id $assigneeObjectId --assignee-principal-type ServicePrincipal
+
+#Create Role Assignments (Azure Resource Group level RBAC)
+az role assignment create --role Owner --resource-group $RG --assignee-object-id $assigneeObjectId --assignee-principal-type ServicePrincipal
+az role assignment create --role "Azure Kubernetes Service RBAC Cluster Admin" --resource-group $RG --assignee-object-id  $assigneeObjectId --assignee-principal-type ServicePrincipal
 
 #Create federated identity credentials for use from a GitHub Branch
 fedReqUrl="https://graph.microsoft.com/beta/applications/$applicationObjectId/federatedIdentityCredentials"
@@ -47,8 +54,16 @@ fedReqBody=$(jq -n --arg n "$APPNAME-env-$GHENV" \
 echo $fedReqBody | jq -r
 az rest --method POST --uri $fedReqUrl --body "$fedReqBody"
 
+#Create federated identity credentials for use from a GitHub PR
+fedReqUrl="https://graph.microsoft.com/beta/applications/$applicationObjectId/federatedIdentityCredentials"
+fedReqBody=$(jq -n --arg n "$APPNAME-pr" \
+                   --arg r "repo:$GHORG/$GHREPO:pull_request" \
+                   --arg d "Access for GitHub PR" \
+             '{name:$n,issuer:"https://token.actions.githubusercontent.com",subject:$r,description:$d,audiences:["api://AzureADTokenExchange"]}')
+echo $fedReqBody | jq -r
+az rest --method POST --uri $fedReqUrl --body "$fedReqBody"
+
 #Retrieving values needed for GitHub secret creation
-subscriptionId=$(az account show --query id -o tsv)
 clientId=$appId
 tenantId=$(az account show --query tenantId -o tsv)
 

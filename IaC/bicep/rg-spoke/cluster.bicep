@@ -67,7 +67,7 @@ param gitOpsBootstrappingRepoBranch string
 // var clusterAdminRoleId = 'b1ff04bb-8a4e-4dc4-8eb5-8693973ce19b'
 // var clusterReaderRoleId = '7f6c6a51-bcf8-42ba-9220-52d62157d7db'
 // var serviceClusterUserRoleId = '4abbcc35-e782-43d8-92c5-2d3f1bd2253f'
-var subRgUniqueString = uniqueString('aks', subscription().subscriptionId, resourceGroupName)
+var subRgUniqueString = uniqueString('aks', subscription().subscriptionId, resourceGroupName, location)
 var nodeResourceGroupName = 'rg-${clusterName}-nodepools'
 var clusterName = 'aks-${subRgUniqueString}'
 var logAnalyticsWorkspaceName = 'la-${clusterName}'
@@ -92,6 +92,22 @@ module rg '../CARML/Microsoft.Resources/resourceGroups/deploy.bicep' = {
     name: resourceGroupName
     location: location
   }
+}
+
+resource acr 'Microsoft.ContainerRegistry/registries@2021-09-01' existing = {
+  scope: resourceGroup(resourceGroupName)
+  name: defaultAcrName
+}
+
+module akvCertFrontend './cert.bicep' = {
+  name: 'CreateFeKvCert'
+  params: {
+    location: location
+    akvName: keyVault.name
+    certificateName: 'frontendCertificate'
+    certificateCommonName:  'frontendCertificate'
+  }
+  scope: resourceGroup(resourceGroupName)
 }
 
 module nodeRgRbac '../CARML/Microsoft.Resources/resourceGroups/.bicep/nested_rbac.bicep' = {
@@ -333,9 +349,9 @@ module agw '../CARML/Microsoft.Network/applicationGateways/deploy.bicep' = {
     ]
     frontendPorts: [
       {
-        name: 'port-80'
+        name: 'port-443'
         properties: {
-          port: 80
+          port: 443
         }
       }
     ]
@@ -352,12 +368,12 @@ module agw '../CARML/Microsoft.Network/applicationGateways/deploy.bicep' = {
     }
     enableHttp2: false
     sslCertificates: [
-      // {
-      //   name: '${agwName}-ssl-certificate'
-      //   properties: {
-      //     keyVaultSecretId: '${keyVault.outputs.uri}secrets/gateway-public-cert'
-      //   }
-      // }
+      {
+        name: '${agwName}-ssl-certificate'
+        properties: {
+          keyVaultSecretId: '${keyVault.outputs.uri}secrets/frontendCertificate'
+        }
+      }
     ]
     probes: [
       {
@@ -398,28 +414,23 @@ module agw '../CARML/Microsoft.Network/applicationGateways/deploy.bicep' = {
           probe: {
             id: '${subscription().id}/resourceGroups/${resourceGroupName}/providers/Microsoft.Network/applicationGateways/${agwName}/probes/probe-${aksBackendDomainName}'
           }
-          // trustedRootCertificates: [
-          //   {
-          //     id: '${subscription().id}/resourceGroups/${resourceGroupName}/providers/Microsoft.Network/applicationGateways/${agwName}/trustedRootCertificates/root-cert-wildcard-aks-ingress'
-          //   }
-          // ]
         }
       }
     ]
     httpListeners: [
       {
-        name: 'listener-http'
+        name: 'listener-https'
         properties: {
           frontendIPConfiguration: {
             id: '${subscription().id}/resourceGroups/${resourceGroupName}/providers/Microsoft.Network/applicationGateways/${agwName}/frontendIPConfigurations/apw-frontend-ip-configuration'
           }
           frontendPort: {
-            id: '${subscription().id}/resourceGroups/${resourceGroupName}/providers/Microsoft.Network/applicationGateways/${agwName}/frontendPorts/port-80'
+            id: '${subscription().id}/resourceGroups/${resourceGroupName}/providers/Microsoft.Network/applicationGateways/${agwName}/frontendPorts/port-443'
           }
-          protocol: 'Http'
-          // sslCertificate: {
-          //   id: '${subscription().id}/resourceGroups/${resourceGroupName}/providers/Microsoft.Network/applicationGateways/${agwName}/sslCertificates/${agwName}-ssl-certificate'
-          // }
+          protocol: 'Https'
+          sslCertificate: {
+            id: '${subscription().id}/resourceGroups/${resourceGroupName}/providers/Microsoft.Network/applicationGateways/${agwName}/sslCertificates/${agwName}-ssl-certificate'
+          }
           hostName: 'bicycle.${domainName}'
           hostNames: []
           requireServerNameIndication: false
@@ -432,7 +443,7 @@ module agw '../CARML/Microsoft.Network/applicationGateways/deploy.bicep' = {
         properties: {
           ruleType: 'Basic'
           httpListener: {
-            id: '${subscription().id}/resourceGroups/${resourceGroupName}/providers/Microsoft.Network/applicationGateways/${agwName}/httpListeners/listener-http'
+            id: '${subscription().id}/resourceGroups/${resourceGroupName}/providers/Microsoft.Network/applicationGateways/${agwName}/httpListeners/listener-https'
           }
           backendAddressPool: {
             id: '${subscription().id}/resourceGroups/${resourceGroupName}/providers/Microsoft.Network/applicationGateways/${agwName}/backendAddressPools/${aksBackendDomainName}'
@@ -449,6 +460,7 @@ module agw '../CARML/Microsoft.Network/applicationGateways/deploy.bicep' = {
   scope: resourceGroup(resourceGroupName)
   dependsOn: [
     rg
+    akvCertFrontend
   ]
 }
 
@@ -458,6 +470,7 @@ module clusterIdentityRbac1 '../CARML/Microsoft.Network/virtualNetworks/subnets/
     principalIds: [
       clusterControlPlaneIdentity.outputs.principalId
     ]
+    principalType: 'ServicePrincipal'
     roleDefinitionIdOrName: 'Network Contributor'
     resourceId: '${subscription().id}/resourceGroups/${vNetResourceGroup}/providers/Microsoft.Network/virtualNetworks/${vnetName}/subnets/${clusterNodesSubnetName}'
   }
@@ -474,6 +487,7 @@ module clusterIdentityRbac2 '../CARML/Microsoft.Network/virtualNetworks/subnets/
     principalIds: [
       clusterControlPlaneIdentity.outputs.principalId
     ]
+    principalType: 'ServicePrincipal'
     roleDefinitionIdOrName: 'Network Contributor'
     resourceId: '${subscription().id}/resourceGroups/${vNetResourceGroup}/providers/Microsoft.Network/virtualNetworks/${vnetName}/subnets/${clusterIngressSubnetName}'
   }
@@ -558,7 +572,7 @@ module cluster '../CARML/Microsoft.ContainerService/managedClusters/deploy.bicep
       {
         name: 'npsystem'
         count: 3
-        vmSize: 'Standard_DS2_v2'
+        vmSize: 'Standard_DS3_v2'
         osDiskSizeGB: 80
         osDiskType: 'Ephemeral'
         osType: 'Linux'
@@ -622,6 +636,13 @@ module cluster '../CARML/Microsoft.ContainerService/managedClusters/deploy.bicep
     }
     httpApplicationRoutingEnabled: false
     monitoringWorkspaceId: clusterLa.outputs.resourceId
+    diagnosticLogCategoriesToEnable: [
+      'cluster-autoscaler'
+      'kube-controller-manager'
+      'kube-audit-admin'
+      'guard'
+    ]
+    diagnosticMetricsToEnable: []
     aciConnectorLinuxEnabled: false
     azurePolicyEnabled: true
     azurePolicyVersion: 'v2'
@@ -708,14 +729,14 @@ module cluster '../CARML/Microsoft.ContainerService/managedClusters/deploy.bicep
   ]
 }
 
-module acrPullRole '../CARML/Microsoft.ContainerService/managedClusters/.bicep/nested_rbac.bicep' = {
+module acrPullRole '../CARML/Microsoft.ContainerRegistry/registries/.bicep/nested_rbac.bicep' = {
   name: 'acrPullRole'
   params: {
     principalIds: [
       cluster.outputs.kubeletidentityObjectId
     ]
     roleDefinitionIdOrName: 'AcrPull'
-    resourceId: cluster.outputs.resourceId
+    resourceId: acr.id
   }
   scope: resourceGroup(resourceGroupName)
   dependsOn: [
@@ -736,6 +757,21 @@ module managedIdentityOperatorRole '../CARML/Microsoft.ContainerService/managedC
   dependsOn: [
     rg
   ]
+}
+module managedIdentityOperatorRole2 '../CARML/Microsoft.Resources/resourceGroups/.bicep/nested_rbac.bicep' = {
+  name: 'managedIdentityOperatorRole2'
+  scope: resourceGroup(resourceGroupName)
+  dependsOn: [
+    cluster
+    rg
+  ]
+  params: {
+    resourceId: resourceGroupName
+    principalIds: [
+      cluster.outputs.kubeletidentityObjectId
+    ]
+    roleDefinitionIdOrName: 'Managed Identity Operator'
+  }
 }
 
 module monitoringMetricsPublisherRole '../CARML/Microsoft.ContainerService/managedClusters/.bicep/nested_rbac.bicep' = {
@@ -805,7 +841,7 @@ module kubernetesConfigurationFlux2 '../CARML/Microsoft.KubernetesConfiguration/
     }
     kustomizations: {
       unified: {
-        path: './cluster-manifests'
+        path: './shared-services/cluster-manifests'
         dependsOn: []
         timeoutInSeconds: 300
         syncIntervalInSeconds: 300
@@ -1547,6 +1583,7 @@ module EnforceResourceLimits '../CARML/Microsoft.Authorization/policyAssignments
           'azure-arc'
           'cluster-baseline-settings'
           'flux-system'
+          'aks-command'
         ]
       }
       effect: {
