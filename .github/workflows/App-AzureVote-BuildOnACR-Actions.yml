@@ -46,11 +46,11 @@ on:
         type: string
 
     secrets:
-      AZURE_CLIENT_ID:
+      ARM_CLIENT_ID:
         required: true
-      AZURE_TENANT_ID:
+      ARM_TENANT_ID:
         required: true
-      AZURE_SUBSCRIPTION_ID:
+      ARM_SUBSCRIPTION_ID:
         required: true
 
 permissions:
@@ -81,9 +81,9 @@ jobs:
       - name: Azure Login
         uses: Azure/login@v1.4.3
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ secrets.ARM_CLIENT_ID }}
+          tenant-id: ${{ secrets.ARM_TENANT_ID }}
+          subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
 
       - name: Debugging
         run: |
@@ -124,9 +124,9 @@ jobs:
       - name: Azure Login
         uses: Azure/login@v1.4.3
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ secrets.ARM_CLIENT_ID }}
+          tenant-id: ${{ secrets.ARM_TENANT_ID }}
+          subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
 
       - name: Install Kubectl
         uses: azure/setup-kubectl@v2.0
